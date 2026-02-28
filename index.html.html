@@ -22,7 +22,8 @@
                 radial-gradient(circle at 90% 80%, rgba(255, 140, 0, 0.08) 0%, transparent 40%);
             color: white;
             margin: 0;
-            overflow: hidden;
+            overflow-x: hidden;
+            height: 100vh;
         }
 
         .vip-card {
@@ -103,7 +104,7 @@
         }
     </style>
 </head>
-<body class="h-full flex items-center justify-center p-6">
+<body class="flex items-center justify-center p-6">
 
     <div id="app-container" class="w-full max-w-md">
         
@@ -178,40 +179,43 @@
 
     </div>
 
-    <!-- Firebase SDK -->
+    <!-- Firebase SDK con manejo de errores para evitar pantalla en blanco -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, getDoc, collection, query, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Configuración
-        const firebaseConfig = JSON.parse(__firebase_config);
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        let db = null;
+        let auth = null;
+        let appId = 'default-app-id';
+        let currentUser = null;
+        let isFirebaseReady = false;
 
-        // Usuarios predeterminados
+        // Intentar inicializar Firebase solo si las variables existen
+        try {
+            if (typeof __firebase_config !== 'undefined') {
+                const firebaseConfig = JSON.parse(__firebase_config);
+                const app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+                appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+                
+                signInAnonymously(auth).then(() => {
+                    onAuthStateChanged(auth, (user) => {
+                        currentUser = user;
+                        isFirebaseReady = true;
+                    });
+                });
+            }
+        } catch (e) {
+            console.warn("Firebase no configurado. Funcionando en modo local.");
+        }
+
         const defaultUsers = {
             "referente": "1234",
             "Altamente.13": "1234",
             "Xican.net": "123"
         };
-
-        let currentUser = null;
-
-        // Autenticación inicial (Regla 3)
-        async function init() {
-            try {
-                await signInAnonymously(auth);
-                onAuthStateChanged(auth, (user) => {
-                    currentUser = user;
-                });
-            } catch (error) {
-                console.error("Auth error", error);
-            }
-        }
-        init();
 
         const screens = {
             start: document.getElementById('start-screen'),
@@ -232,39 +236,40 @@
         // LOGIN
         document.getElementById('login-form').onsubmit = async (e) => {
             e.preventDefault();
-            if (!currentUser) return;
-
             const u = document.getElementById('input-user').value;
             const p = document.getElementById('input-pass').value;
             const btn = document.getElementById('btn-login-submit');
             btn.disabled = true;
 
-            // 1. Verificar default
+            // 1. Verificar default siempre
             if (defaultUsers[u] && defaultUsers[u] === p) {
                 loginSuccess(u, "Admin");
+                btn.disabled = false;
                 return;
             }
 
-            // 2. Verificar Firestore (Regla 1)
-            try {
-                const userDoc = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', u));
-                if (userDoc.exists() && userDoc.data().pass === p) {
-                    loginSuccess(u, "Miembro VIP");
-                } else {
+            // 2. Verificar Firestore si está listo
+            if (isFirebaseReady && db) {
+                try {
+                    const userDoc = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', u));
+                    if (userDoc.exists() && userDoc.data().pass === p) {
+                        loginSuccess(u, "Miembro VIP");
+                    } else {
+                        showError('login');
+                    }
+                } catch (err) {
                     showError('login');
                 }
-            } catch (err) {
+            } else {
+                // Si no hay Firebase, solo entran los default
                 showError('login');
-            } finally {
-                btn.disabled = false;
             }
+            btn.disabled = false;
         };
 
         // REGISTRO
         document.getElementById('register-form').onsubmit = async (e) => {
             e.preventDefault();
-            if (!currentUser) return;
-
             const name = document.getElementById('reg-name').value;
             const user = document.getElementById('reg-user').value;
             const pass = document.getElementById('reg-pass').value;
@@ -278,9 +283,14 @@
                 return;
             }
 
+            if (!isFirebaseReady) {
+                errorLabel.textContent = "Base de datos no disponible en modo local";
+                errorLabel.classList.remove('hidden');
+                return;
+            }
+
             btn.disabled = true;
             try {
-                // Guardar en Firestore (Regla 1)
                 await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', user), {
                     name, user, pass, createdAt: new Date().toISOString()
                 });
@@ -290,7 +300,7 @@
                 document.getElementById('display-user').textContent = user;
                 showScreen('success');
             } catch (err) {
-                errorLabel.textContent = "Error al registrar usuario";
+                errorLabel.textContent = "Error al registrar";
                 errorLabel.classList.remove('hidden');
             } finally {
                 btn.disabled = false;
